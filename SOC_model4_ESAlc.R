@@ -32,7 +32,7 @@ library(viridis)
 library(ranger)
 library(patchwork)
 
-#### parallelizze ####
+#### parallelize ####
 library(future) # oppure library(doParallel) o library(future.apply)
 library(furrr)
 # parallel computing 
@@ -64,7 +64,6 @@ ggsave("/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/WCMC_i
 # https://www.paulamoraga.com/tutorial-open-spatial-data/#:~:text=For%20example%2C%20the%20worldclim_country(),codes%20of%20the%20world%20countries
 #borders <- ne_countries(type = "countries", country = "Italy", scale = "medium", returnclass = "sf")
 regions <- rnaturalearth::ne_states("Italy", returnclass = "sf")
-
 er <- regions %>% filter(region=="Emilia-Romagna")
 ext_er <- ext(er)
 
@@ -76,14 +75,14 @@ res(esalc)
 crs(esalc)
 freq(esalc)
 
-####### mask to Italy ##########
+####### mask to Italia ##########
 esalc <- mask(crop(esalc, regions), regions)
 
 esalc_df <- as.data.frame(esalc, xy=T) 
 esalc_df$landcover <- as.numeric(esalc_df$landcover)
 length(unique(esalc_df$landcover)) # 18 out of 22
 
-####### mask to ER region #######
+####### mask to ER #######
 esalc_er <- mask(crop(esalc, er), er)
 freq(esalc_er)
 esalc_er_df <- as.data.frame(esalc_er, xy=T) 
@@ -152,7 +151,17 @@ ggplot()+
   theme_minimal()
 ggsave("SOC_stock_ER_resampled.png", width=12, height=7)
 
-######## Resample for rasters
+#### Crop on ER region of all rasters ####
+#er <- regions %>% filter(region=="Emilia-Romagna")
+#ext_er <- ext(er)
+er_vect <- vect(er)
+# Crop + mask su ciascun raster predittore e target
+soc_er_cut <- mask(crop(soc_er, er_vect), er_vect)
+esalc_er <- mask(crop(esalc, er_vect), er_vect)
+elev_cut <- mask(crop(elev_300, er_vect), er_vect)
+bio_cut <- mask(crop(bio_selected, er_vect), er_vect) # bio_selected o worldclim_bio_ita
+
+######## resample
 soc_er_cut <- resample(soc_er_cut, esalc_er)
 elev_cut <- resample(elev_cut, esalc_er)
 bio_cut  <- resample(bio_cut, esalc_er)
@@ -168,14 +177,14 @@ names(stack_train) <- c("SOC", "ESAlc", "Elevation", "AnnualMeanTemperature", "T
 freq(stack_train$ESAlc)
 plot(stack_train)
 
-###### Save and import final stack stack_train (solo su er) #####
+###### Save and import final stack stack_train #####
 #writeRaster(stack_train, "/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/stack_train_ESA.tif", overwrite=T)
 #stack_train <- rast("/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/stack_train_ESA.tif")
 
 #stack_train_300m_res <- rast("/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/stack_train_300m_res.tif") # QUA CON CORINE LC MA SENZA ESA LC
 # mentre il tif "/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/stack_train.tif" ha la risoluzione iniziale (di 0.008°)
 
-######### aggiungi a stack_train_300m_res il raster ESAlc
+######### add  raster ESAlc to stack_train_300m_res
 #esalc_er <- resample(esalc, stack_train_300m_res)
 #stack_train_300m_res <- c(stack_train_300m_res, esalc_er)
 #names(stack_train_300m_res)[10] <- "ESAlc"
@@ -183,11 +192,11 @@ plot(stack_train)
 #stack_train_300m_res <- stack_train_300m_res[[-2]] # tolgo corine lc
 
 #######################
-###### Predizione valori SOC tramite Random Forest ######
+###### Prediction SOC values through Random Forest ######
 # robusto, non lineare, ideale per dati spaziali rumorosi
 library(randomForest)
 
-#### TRAINING Data ####
+#### Prepare training data ####
 # rimuovi classi 190,200,210,220
 # escludiamo dal training classi di lc dove SOC non è definito o non è significativo (acque, ghiacci, superfici completamente impermeabili, aree “bare” senza suolo)
 remove <- c(190, 200, 210, 220)
@@ -220,7 +229,7 @@ rf_model_4_permutation_ESAlc <- ranger::ranger(
 saveRDS(rf_model_4_permutation_ESAlc, file = "rf_model_4_permutation_ESAlc.rds")
 rf_model_4_permutation_ESAlc <- readRDS("rf_model_4_permutation_ESAlc.rds")
 
-##### Model Results ######
+##### Model results ######
 # https://scikit-learn.org/stable/modules/permutation_importance.html 
 print(rf_model_4_permutation_ESAlc)
 # Type:                             Regression 
@@ -261,7 +270,7 @@ ggplot(var_imp_perm_df, aes(x = reorder(Variable, Percentage), y = Percentage, f
   theme_minimal()
 ggsave("var_imp_mod4_perm_ESAlc.png", width=12, height=7)
 
-##### Visualizza relazione tra SOC in ER e tutte le variabili considerate - MODELLO 4 ######
+##### Relationship between SOC in ER and all considered variables ######
 # Separa variabili numeriche da variabile fattore(ESA)
 #### Plot 1: var numeriche ####
 num_vars <- c("Elevation", "AnnualMeanTemperature", "TemperatureSeasonality", "MeanTemperatureofWarmestQuarter",
@@ -307,9 +316,7 @@ ggplot(df_emr, aes(x =ESAlc, y = SOC, fill = median_SOC)) +
        y = "SOC (Mg/Ha)")
 ggsave("/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/SOC_ESAlc.png", width=12, height=7)
 
-
-
-###### Predizione su tutta italia ####
+###### Prediction across Italy ####
 #remove <- c(190, 200, 210, 220)
 train_lvls <- sort(unique(as.integer(as.character(levels(df_emr$ESAlc)))))  # livelli visti nel training
 ## stack nazionale
@@ -343,27 +350,11 @@ if (any(ok)) {
 ## ricomponi raster di output
 SOC_pred_rast <- rast(stack_national[[1]])
 values(SOC_pred_rast) <- SOC_vec
-
 writeRaster(SOC_pred_rast, "/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/SOC_pred_ita_model4_ESAlc_new.tif")
 SOC_pred_rast <- rast("/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/SOC_pred_ita_model4_ESAlc_new.tif")
 
 
-###### Prediction on Italy
-predictors_df <- as.data.frame(stack_national, na.rm=F)
-SOC_pred <- predict(rf_model_4_permutation_ESAlc, data = predictors_df)$predictions
-
-# Crea nuovo raster con predizioni
-SOC_rast <- rast(stack_national[[1]])
-values(SOC_rast) <- NA  # inizializza
-# inserisce predizioni dove c’erano dati validi
-valid_cells <- !is.na(values(stack_national[[1]]))
-values(SOC_rast)[valid_cells] <- SOC_pred
-SOC_rast <- predict(stack_national, rf_model_4_permutation_ESAlc, na.rm = TRUE)
-
-# writeRaster(SOC_rast, "/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/SOC_pred_ita_model4_ESAlc.tif") #, overwrite = TRUE)
-SOC_rast <- rast("/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/SOC_pred_ita_model4_ESAlc.tif")
-
-####### plot predizione ######
+####### plot prediction ######
 SOC_rast_df <- as.data.frame(SOC_pred_rast, xy = TRUE, na.rm = TRUE)
 names(SOC_rast_df)[3] <- "SOC"
 
@@ -409,6 +400,7 @@ p1 + p2 +
   plot_layout(guides = "collect") 
 
 ggsave("/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/SOC_pred_ER_model4_confronto.png", width = 14, height = 7)
+
 
 ##### Valutazione quantitativa del modello ######
 
@@ -471,6 +463,16 @@ a + b +
   plot_annotation(title = "Observed vs Predicted SOC (in Emilia-Romagna Region)") 
 ggsave("/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/scatterplot_obs_pred_hexbins.png", width=16, height=7)
 
+#The trained Random Forest model, based on soil and environmental covariates from the Emilia-Romagna region, achieved strong predictive performance as evaluated using internal validation over the training area. Specifically, the model obtained an R² value of 0.821, indicating that approximately 82% of the variance in the observed SOC (Soil Organic Carbon) values is explained by the model.
+#The Root Mean Square Error (RMSE) was 11.79, while the Mean Absolute Error (MAE) was 9.07. These values suggest relatively good agreement between predicted and observed SOC values, though some level of residual error remains — potentially due to spatial heterogeneity, measurement errors, or unaccounted-for local drivers of SOC.
+#These metrics suggest the model is well-calibrated and capable of capturing the key patterns in SOC distribution across the Emilia-Romagna training region.
+# The observed vs. predicted SOC scatterplot provides a visual assessment of the model's fit. In a well-performing model, the points should ideally lie along the 1:1 line (i.e., the red diagonal), indicating that predicted values closely match observed ones.
+# In this case, the scatterplot shows:
+# A generally strong alignment around the 1:1 line.
+# Some scatter at high or low SOC values, suggesting areas where the model may under- or over-estimate SOC.
+# A fitted regression line can also be used to assess bias: ideally, the slope should be close to 1, and the intercept close to 0.
+# The coefficient of determination (R² = 0.821) indicates a good model fit, but minor deviations from the 1:1 line reflect real-world complexity that is not fully captured by the available covariates.
+
 ##########################
 ###### MODELLO LINEARE WCMC STOCK PER VALUTARE IN FN DI VARIABILI BIOCLIM, ALTITUD, ESALC ######
 library(biglm)
@@ -514,7 +516,6 @@ for (i in 1:nlyr(stack)) {
 }
 stack_df <- as.data.frame(stack,  xy=T, na.rm = F)
 
-
 ######## Extents at provinces level ########
 # Creating extents for every province
 # Create a list to store SpatExtent objects for each province
@@ -555,7 +556,6 @@ cropped_raster_list <- lapply(cropped_raster_list, function(r) {
 
 sum(is.na(cropped_raster_list$Bari$ABGC))
 view(cropped_raster_list$Bari)
-
 
 ##### Plot boxplots for esalc for each province ####
 out_dir <- "/media/r_projects/sofia.prandelli2/wcmc_rail/WCMC_SOC/SOC_MODEL_4/plots_c_stock_per_prov/boxplot_provinces"
@@ -610,8 +610,6 @@ for (prov in names(by_prov)) {
   outfile <- file.path(out_dir, paste0("boxplot_", str_replace_all(prov, "[^A-Za-z0-9_-]", "_"), ".png"))
   ggsave(outfile, plot = p, width = 12, height = 8, dpi = 300)
 }
-
-
 
 ######## Create a list of df with Mean C values for Corine LC for provinces ########
 # Aggiunta di errore standard (meglio rispetto a deviazione standard)
@@ -907,6 +905,3 @@ ggsave(
   width = 30,
   height = 7,
 )
-
-
-
