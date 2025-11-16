@@ -1,0 +1,338 @@
+Option Explicit
+
+'---------------------------------------------
+' Conversione numerica locale-safe
+'---------------------------------------------
+Private Function ToDouble(ByVal s As String) As Double
+    Dim decSep As String, thouSep As String
+    decSep = Application.International(xlDecimalSeparator)
+    thouSep = Application.International(xlThousandsSeparator)
+    s = Trim(s)
+    If Len(thouSep) > 0 Then s = Replace(s, thouSep, "")
+    If decSep = "," Then
+        s = Replace(s, ".", ",")
+    Else
+        s = Replace(s, ",", ".")
+    End If
+    If Len(s) = 0 Then
+        ToDouble = 0
+    Else
+        ToDouble = CDbl(s)
+    End If
+End Function
+
+
+'---------------------------------------------
+' Mapping CORINE ? ESA GlobCover
+'---------------------------------------------
+Private Function CorineToESA(ByVal corineCode As Long) As Long
+    Select Case corineCode
+        Case 111, 112, 121 To 133, 141, 142
+            CorineToESA = 190
+        Case 211
+            CorineToESA = 14
+        Case 212, 213
+            CorineToESA = 11
+        Case 221 To 223
+            CorineToESA = 20
+        Case 231
+            CorineToESA = 140
+        Case 241 To 244
+            CorineToESA = 20
+        Case 311
+            CorineToESA = 140
+        Case 312
+            CorineToESA = 40
+        Case 313
+            CorineToESA = 60
+        Case 321
+            CorineToESA = 140
+        Case 322
+            CorineToESA = 130
+        Case 323
+            CorineToESA = 110
+        Case 324
+            CorineToESA = 120
+        Case 331 To 333
+            CorineToESA = 200
+        Case 411 To 423
+            CorineToESA = 180
+        Case 511 To 523
+            CorineToESA = 210
+        Case Else
+            CorineToESA = 0
+    End Select
+End Function
+
+
+'---------------------------------------------
+' Macro principale: calcolo area e C stock
+'---------------------------------------------
+Sub Calcola_area_e_Cstock()
+
+    Dim province As String
+    Dim description As String
+    Dim landcover As String
+    Dim hectares As Double
+    Dim squareMeters As Double
+    Dim mean_ABGC As Double
+    Dim mean_SOC As Double
+    Dim sem_ABGC As Double
+    Dim sem_SOC As Double
+    Dim mean_value As Double
+    Dim mean_value_kg_m2 As Double
+    Dim sem_totale As Double
+    Dim ws As Worksheet
+    Dim trovato As Boolean
+    Dim i As Long
+    Dim risultatoTonn As Double
+    Dim wsResults As Worksheet
+    Dim ultimaRiga As Long
+    Dim tipologia As String
+    Dim sInput As String
+    Dim systemType As String
+    Dim corineCode As Long
+    Dim esaClass As Long
+
+    province = InputBox("Insert Italian Province of the study area:")
+    systemType = LCase(Trim(InputBox("Specify land cover system used ('esa' or 'corine'):")))
+
+    Do While systemType <> "esa" And systemType <> "corine"
+        If systemType = "" Then Exit Sub
+        systemType = LCase(Trim(InputBox("Invalid value. Type 'esa' or 'corine':")))
+    Loop
+
+    landcover = InputBox("Insert the land cover code (" & UCase(systemType) & "):")
+
+    If systemType = "corine" Then
+        corineCode = Val(landcover)
+        esaClass = CorineToESA(corineCode)
+        If esaClass = 0 Then
+            MsgBox "No ESA equivalent found for CORINE code " & corineCode, vbExclamation
+            Exit Sub
+        Else
+            MsgBox "CORINE code " & corineCode & " corresponds to ESA GlobCover class " & esaClass, vbInformation
+            landcover = CStr(esaClass)
+        End If
+    Else
+        esaClass = Val(landcover)
+        corineCode = 0
+    End If
+
+    sInput = InputBox("Insert the area considered in Hectares:")
+    hectares = ToDouble(sInput)
+    If hectares <= 0 Then Exit Sub
+
+    tipologia = LCase(Trim(InputBox("Inserisci la tipologia di progetto ('verde' o 'binari'):")))
+    Do While tipologia <> "verde" And tipologia <> "binari"
+        If tipologia = "" Then Exit Sub
+        tipologia = LCase(Trim(InputBox("Valore non valido. Inserisci 'verde' oppure 'binari':")))
+    Loop
+
+    On Error Resume Next
+    Set ws = Sheets(province)
+    On Error GoTo 0
+    If ws Is Nothing Then
+        MsgBox "Sheet not found. Verify the name of the Province.", vbCritical
+        Exit Sub
+    End If
+
+    trovato = False
+    For i = 2 To ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+        If ws.Cells(i, 1).Value = esaClass Then
+            mean_ABGC = CDbl(ws.Cells(i, 2).Value)
+            sem_ABGC = CDbl(ws.Cells(i, 3).Value)
+            mean_SOC = CDbl(ws.Cells(i, 4).Value)
+            sem_SOC = CDbl(ws.Cells(i, 5).Value)
+            description = CStr(ws.Cells(i, 6).Value)
+            trovato = True
+            Exit For
+        End If
+    Next i
+
+    If Not trovato Then
+        MsgBox "ESA class " & esaClass & " not found in sheet for " & province, vbExclamation
+        Exit Sub
+    End If
+
+    mean_value = mean_ABGC + mean_SOC
+    sem_totale = Sqr(sem_ABGC ^ 2 + sem_SOC ^ 2)
+    squareMeters = hectares * 10000#
+    mean_value_kg_m2 = mean_value * 0.1
+    risultatoTonn = mean_value * hectares
+
+    On Error Resume Next
+    Set wsResults = Sheets("Results")
+    On Error GoTo 0
+    If wsResults Is Nothing Then
+        Set wsResults = Sheets.Add
+        wsResults.Name = "Results"
+        With wsResults
+            .Cells(1, 1).Value = "Province"
+            .Cells(1, 2).Value = "CORINE Code"
+            .Cells(1, 3).Value = "ESA Class"
+            .Cells(1, 4).Value = "Description"
+            .Cells(1, 5).Value = "Hectares"
+            .Cells(1, 6).Value = "SquareMeters"
+            .Cells(1, 7).Value = "Mean C stock (T/ha)"
+            .Cells(1, 8).Value = "Mean C stock (kg/m²)"
+            .Cells(1, 9).Value = "Total Carbon Tonnes"
+            .Cells(1, 10).Value = "Total SEM (T/ha)"
+            .Cells(1, 11).Value = "Tipologia di progetto"
+        End With
+    End If
+
+    ultimaRiga = wsResults.Cells(wsResults.Rows.Count, 1).End(xlUp).Row + 1
+    With wsResults
+        .Cells(ultimaRiga, 1).Value = province
+        .Cells(ultimaRiga, 2).Value = corineCode
+        .Cells(ultimaRiga, 3).Value = esaClass
+        .Cells(ultimaRiga, 4).Value = description
+        .Cells(ultimaRiga, 5).Value = hectares
+        .Cells(ultimaRiga, 6).Value = squareMeters
+        .Cells(ultimaRiga, 7).Value = mean_value
+        .Cells(ultimaRiga, 8).Value = mean_value_kg_m2
+        .Cells(ultimaRiga, 9).Value = risultatoTonn
+        .Cells(ultimaRiga, 10).Value = sem_totale
+        .Cells(ultimaRiga, 11).Value = tipologia
+    End With
+
+    MsgBox "Calculation completed successfully.", vbInformation
+
+End Sub
+
+
+'---------------------------------------------------------------
+' Restituisce il miglior valore medio (T/ha) e la CLASSE forestale usata (in outTargetClass, ByRef)
+' Cerca nel foglio della provincia: A=ESA class, B=mean_ABGC, D=mean_SOC
+' Classi candidate: 40, 50, 60, 70, 90, 100, 110, 130, 180
+'---------------------------------------------------------------
+Private Function GetBestForestRef(prov As String, ByRef outTargetClass As Long) As Double
+    Dim wsProv As Worksheet
+    Dim i As Long, bestMean As Double, candidate As Double, cls As Long
+    Dim forestClasses As Variant
+    forestClasses = Array(60, 90, 100, 110, 130, 180)
+
+    bestMean = 0
+    outTargetClass = 0
+
+    On Error Resume Next
+    Set wsProv = Sheets(prov)
+    On Error GoTo 0
+
+    If wsProv Is Nothing Then
+        GetBestForestRef = 0
+        Exit Function
+    End If
+
+    For i = 2 To wsProv.Cells(wsProv.Rows.Count, 1).End(xlUp).Row
+        cls = CLng(Val(wsProv.Cells(i, 1).Value))
+        If Not IsError(Application.Match(cls, forestClasses, 0)) Then
+            If IsNumeric(wsProv.Cells(i, 2).Value) And IsNumeric(wsProv.Cells(i, 4).Value) Then
+                candidate = CDbl(wsProv.Cells(i, 2).Value) + CDbl(wsProv.Cells(i, 4).Value)
+                If candidate > bestMean Then
+                    bestMean = candidate
+                    outTargetClass = cls
+                End If
+            End If
+        End If
+    Next i
+
+    GetBestForestRef = bestMean
+End Function
+
+
+Sub CalcolaBilancioCarbonio()
+
+    Dim ws As Worksheet: Set ws = ThisWorkbook.Sheets("Results")
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    Dim i As Long
+    Dim prov As String, tip As String
+    Dim landcover As Long
+    Dim hectares As Double, originalC As Double
+    Dim meanTHaRef As Double, newC As Double, delta As Double
+    Dim classeUsata As String
+    Dim forestClass As Long   ' <--- VARIABILE LONG da passare ByRef
+
+    ' Intestazioni (riga 1)
+    If Len(ws.Cells(1, 12).Value) = 0 Then ws.Cells(1, 12).Value = "New C Stock (Tonn)"
+    If Len(ws.Cells(1, 13).Value) = 0 Then ws.Cells(1, 13).Value = "Classe usata"
+    If Len(ws.Cells(1, 14).Value) = 0 Then ws.Cells(1, 14).Value = "Gain/Loss (Tonn)"
+    If Len(ws.Cells(1, 15).Value) = 0 Then ws.Cells(1, 15).Value = "Final C Stock (Tonn)"
+    If Len(ws.Cells(1, 16).Value) = 0 Then ws.Cells(1, 16).Value = "Classe target (ESA)"
+
+    For i = 3 To lastRow
+        prov = CStr(ws.Cells(i, 1).Value)
+        landcover = CLng(Val(ws.Cells(i, 3).Value))                  ' ESA Class
+        hectares = ToDouble(CStr(ws.Cells(i, 5).Value))              ' Ha, locale-safe
+        originalC = ToDouble(CStr(ws.Cells(i, 9).Value))             ' T, locale-safe
+        tip = LCase(Trim(CStr(ws.Cells(i, 11).Value)))               ' "verde" / "binari"
+
+        newC = originalC
+        classeUsata = "Original"
+        delta = 0
+        forestClass = 0
+
+        If tip = "verde" Then
+
+            ' 1) Classi naturali: 30–110, 160–180 --> nessun cambiamento
+            If (landcover >= 30 And landcover <= 110) Or (landcover >= 160 And landcover <= 180) Then
+                newC = originalC
+                classeUsata = "Natural class (no change)"
+                delta = 0
+
+            ' 2) Classi da rinverdire: 11–20, 120–150, 190–210 --> converti a miglior forest class provinciale
+            ElseIf ((landcover >= 11 And landcover <= 20) Or (landcover >= 120 And landcover <= 150) _
+                Or (landcover >= 190 And landcover <= 210)) Then
+
+                meanTHaRef = GetBestForestRef(prov, forestClass)  ' <--- PASSA forestClass (Long) ByRef
+                If meanTHaRef > 0 Then
+                    newC = hectares * meanTHaRef
+                    If newC < originalC Then
+                        ' non consentire loss per "verde"
+                        newC = originalC
+                        classeUsata = "Original (no gain)"
+                        delta = 0
+                        forestClass = 0
+                    Else
+                        classeUsata = "Converted to forest class " & forestClass
+                        delta = newC - originalC
+                    End If
+                Else
+                    ' nessuna classe forestale disponibile nei dati provinciali
+                    newC = originalC
+                    classeUsata = "No forest class available"
+                    delta = 0
+                    forestClass = 0
+                End If
+
+            Else
+                ' altre classi non mappate
+                newC = originalC
+                classeUsata = "Unchanged"
+                delta = 0
+            End If
+
+        ElseIf tip = "binari" Then
+            newC = 0
+            classeUsata = "Construction loss"
+            delta = -originalC
+
+        Else
+            classeUsata = "Unknown project type"
+            delta = 0
+        End If
+
+        ' Scrittura risultati
+        ws.Cells(i, 12).Value = newC
+        ws.Cells(i, 13).Value = classeUsata
+        ws.Cells(i, 14).Value = delta
+        ws.Cells(i, 15).Value = delta
+        ws.Cells(i, 16).Value = IIf(forestClass > 0, forestClass, "-")
+    Next i
+
+    MsgBox "Carbon balance calculation completed.", vbInformation
+
+End Sub
+
+
